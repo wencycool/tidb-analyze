@@ -527,7 +527,7 @@ def timeout_handler(signum, frame):
     raise Exception("timeout")
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='analyze slow log',
+    parser = argparse.ArgumentParser(description='analyze tidb tables',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-H', '--host', help='database host', default='127.0.0.1')
     parser.add_argument('-P', '--port', help='database port', default=4000,type=int)
