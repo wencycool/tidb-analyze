@@ -362,7 +362,7 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
     return result, True, None
 
 
-def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", order=True, preview=False):
+def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", slow_query_table_first=False,order=True, preview=False):
     """
     执行统计信息搜集
     :param conn:
@@ -372,7 +372,7 @@ def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", orde
     :param preview: 是否预览，如果为True，那么只打印统计信息搜集语句，不执行
     :return: 返回结果（table_schema, table_name, partition_name, col_list, sql_text, succ, msg）
     """
-    result, succ, msg = gen_need_analyze_sqls(conn, order)
+    result, succ, msg = gen_need_analyze_sqls(conn,slow_query_table_first, order)
     log.info(f"需要做统计信息搜集的对象数为: {len(result)}")
     if not succ:
         return None, False, msg
@@ -534,8 +534,11 @@ if __name__ == '__main__':
     parser.add_argument('-u', '--user', help='database user', default='root')
     parser.add_argument('-p', '--password', help='database password', nargs='?')
     parser.add_argument('-d', '--database', help='database name', default='information_schema')
-    parser.add_argument('-t', '--timeout', help='timeout', default=12 * 3600)
     parser.add_argument('--preview', help='开启预览模式，不搜集统计信息搜集', action='store_true')
+    parser.add_argument('--slow-log-first',help="当表在slow_query中优先做统计信息搜集",action='store_true')
+    parser.add_argument('--start-time',help="统计信息允许的开始时间窗口",default="20:00")
+    parser.add_argument('--end-time',help="统计信息允许的结束时间窗口",default="06:00")
+    parser.add_argument('-t','--timeout',help="整个统计信息搜集最大时间，超过该时间则超时退出,单位为秒",default=12 * 3600,type=int)
     args = parser.parse_args()
     log.basicConfig(level=log.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     if args.password is None:
@@ -549,7 +552,13 @@ if __name__ == '__main__':
             database=args.database,
             charset='utf8mb4'
         )
-        with_timeout(args.timeout, do_analyze, conn, preview=False)
+        slow_query_table_first = False
+        preview = False
+        if args.slow_log_first:
+            slow_query_table_first = True
+        if args.preview:
+            preview = True
+        with_timeout(args.timeout, do_analyze,conn,start_time=args.start_time,end_time=args.end_time,slow_query_table_first=slow_query_table_first,order=True,preview=preview)
         conn.close()
     except Exception as e:
         log.error(f"connect to database failed, error: {e}")
