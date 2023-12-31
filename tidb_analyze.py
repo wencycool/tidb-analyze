@@ -309,7 +309,7 @@ def collect_need_analyze_objects(conn: pymysql.connect):
     if succ:
         for table_schema,table_name,partition_name in object_dict:
             if (table_schema,table_name) in tables_with_blob_dict:
-                object_dict[(table_schema,table_name,partition_name)] = tables_with_blob_dict[(table_schema,table_name)][2]
+                object_dict[(table_schema,table_name,partition_name)] = tables_with_blob_dict[(table_schema,table_name)]
     result = []  # 包含（table_schema, table_name, partition_name, col_list）的列表
     for table_schema,table_name,partition_name in object_dict:
         result.append((table_schema,table_name,partition_name,object_dict[(table_schema,table_name,partition_name)]))
