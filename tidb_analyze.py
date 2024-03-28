@@ -109,6 +109,63 @@ def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
     log.info(f"健康度低于{threshold}的表(或者分区)数为: {len(result)}")
     return result, True, None
 
+'''
+mysql> show stats_meta where row_count=0;
++---------+------------+----------------+---------------------+--------------+-----------+
+| Db_name | Table_name | Partition_name | Update_time         | Modify_count | Row_count |
++---------+------------+----------------+---------------------+--------------+-----------+
+| tpch    | orders     |                | 2024-03-28 15:39:39 |            0 |         0 |
+| tpch    | lineitem   |                | 2024-03-28 15:39:39 |            0 |         0 |
+| tpch    | t1         |                | 2024-03-28 21:32:35 |            0 |         0 |
+| tpch    | part       |                | 2024-03-28 21:42:47 |            0 |         0 |
++---------+------------+----------------+---------------------+--------------+-----------+
+4 rows in set (0.00 sec)
+'''
+# 获取drop stats <tabname>的表需要重新搜集
+def get_analyze_drop_stats_objects(conn: pymysql.connect):
+    """
+    先利用show stats_meta找到所有包含统计信息的表
+    找出所有去重后的表，结合 information_schema.tables查找不在show stats_meta中的表，即为drop stats <tabname>的表
+    :param conn:
+    :return:
+    """
+    sql_text = """
+    show stats_meta;
+    """
+    cursor = conn.cursor()
+    result = []
+    # 将stats_meta中的表存入字典
+    stats_meta_dict = {}
+    try:
+        cursor.execute(sql_text)
+        for row in cursor:
+            table_schema, table_name, partition_name, update_time, modify_count, row_count = row
+            stats_meta_dict[(table_schema, table_name)] = True
+    except Exception as e:
+        log.error(f"execute sql:{sql_text},error:{e}")
+        return None, False, e
+    finally:
+        cursor.close()
+    # 获取所有表
+    sql_text = """
+    select table_schema,table_name from information_schema.tables where table_type = 'BASE TABLE' and table_schema not in ('mysql');
+    """
+    cursor = conn.cursor()
+    try:
+        cursor.execute(sql_text)
+        for row in cursor:
+            table_schema, table_name = row
+            if (table_schema, table_name) not in stats_meta_dict:
+                log.debug(f"无统计信息的表: {table_schema}.{table_name}")
+                result.append((table_schema, table_name, ''))
+    except Exception as e:
+        log.error(f"execute sql:{sql_text},error:{e}")
+        return None, False, e
+    finally:
+        cursor.close()
+    log.info(f"无统计信息表数为: {len(result)}")
+    return result, True, None
+
 
 # 从来没搜集过统计信息的表(不包含分区)需搜集
 def get_analyze_never_analyzed_objects(conn: pymysql.connect):
@@ -296,6 +353,11 @@ def collect_need_analyze_objects(conn: pymysql.connect):
     if succ:
         for table_schema, table_name, partition_name, healthy in result:
             object_dict[(table_schema, table_name, partition_name)] = False
+    # 获取drop stats <tabname>的表需要重新搜集
+    result, succ, msg = get_analyze_drop_stats_objects(conn)
+    if succ:
+        for table_schema, table_name, partition_name in result:
+            object_dict[(table_schema, table_name, partition_name)] = False
     # 获取从来没搜集过统计信息的表(不包含分区)需搜集
     result, succ, msg = get_analyze_never_analyzed_objects(conn)
     partition_tables_dict, succ1, msg1 = get_all_partition_tables(conn)
@@ -340,13 +402,25 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
     """
     # 获取需要做统计信息搜集的对象
     need_analyze_objects = collect_need_analyze_objects(conn)
+    # 如果存在(table_schema,table_name,'')则不单独执行分区统计信息搜集，否则统一执行分区统计信息搜集
+    # 对need_analyze_objects按照table_schema,table_name,partition_name升序排列
+    from operator import itemgetter
+    need_analyze_objects.sort(key=itemgetter(0, 1, 2))
     # 生成统计信息搜集语句
     result = []
+    last_table_name = None # 记录上一个表名，后续分区不执行统计信息搜集
+    first = True
     for table_schema, table_name, partition_name, col_list in need_analyze_objects:
         if partition_name == '':
+            last_table_name = (table_schema, table_name)
             sql_text = f"analyze table `{table_schema}`.`{table_name}`"
         else:
-            sql_text = f"analyze table `{table_schema}`.`{table_name}` partition(`{partition_name}`)"
+            # 如果当前分区的表已经做过统计信息搜集，那么不需要重复做统计信息搜集
+            if (table_schema, table_name) == last_table_name:
+                continue
+            # todo 如果表是分区表，那么只做其分区的统计信息搜集，会自动做global merge
+            #  stats，但分区是串行执行，存在效率问题？如果表中所有分区都需要做统计信息搜集，那么是否可以直接做表的统计信息搜集？做成 analyze table xxx partition p0,p1,p2形式
+            sql_text = f"analyze table `{table_schema}`.`{table_name}` partition `{partition_name}`"
         if col_list:
             sql_text = sql_text + f" columns {col_list}"
         result.append((table_schema, table_name, partition_name, col_list, sql_text))
