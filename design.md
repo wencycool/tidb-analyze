@@ -3,6 +3,7 @@
 - 在mysql.analyze_jobs中一直未成功搜集的表（或分区）需重新搜集
 - 健康度低于90的表(或者分区)需重新搜集
 - 从来没搜集过统计信息的表(或者分区)需搜集
+- 做过drop stats的表需要重新搜集
 - 对于分区表，如果只是部分分区失败则只搜集失败的分区，否则搜集整个表
 - 排除blob、clob、lob、text、midieum字段类型（这些字段不做统计信息搜集）
 - 按照table_rows升序搜集
@@ -68,6 +69,13 @@ select table_schema,table_name from INFORMATION_SCHEMA.tables where table_type =
     )
 ```
 > mysql.stats_meta中只包含表信息，无分区信息
+
+**做过drop stats表需要重新搜集**
+```sql
+select table_schema,table_name from INFORMATION_SCHEMA.tables where table_schema not in ('mysql') and table_type = 'BASE TABLE' and (tidb_table_id) not in (
+    -->show stats_meta<--
+    )
+```
 
 
 **所有包含blob、clob、lob、text、midieum字段类型的表**
