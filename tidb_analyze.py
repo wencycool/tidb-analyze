@@ -21,7 +21,6 @@ tables_rows_cache = {}
 table_rows_executed = False
 
 
-# todo drop stats <tabname> 场景没有覆盖
 # todo 考虑当超时或者遇到ctrl+c后终止正在执行的统计信息搜集任务
 
 # 获取统计信息搜集失败的对象（包括表和分区）
@@ -109,6 +108,7 @@ def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
     log.info(f"健康度低于{threshold}的表(或者分区)数为: {len(result)}")
     return result, True, None
 
+
 '''
 mysql> show stats_meta where row_count=0;
 +---------+------------+----------------+---------------------+--------------+-----------+
@@ -121,6 +121,8 @@ mysql> show stats_meta where row_count=0;
 +---------+------------+----------------+---------------------+--------------+-----------+
 4 rows in set (0.00 sec)
 '''
+
+
 # 获取drop stats <tabname>的表需要重新搜集
 def get_analyze_drop_stats_objects(conn: pymysql.connect):
     """
@@ -408,7 +410,7 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
     need_analyze_objects.sort(key=itemgetter(0, 1, 2))
     # 生成统计信息搜集语句
     result = []
-    last_table_name = None # 记录上一个表名，后续分区不执行统计信息搜集
+    last_table_name = None  # 记录上一个表名，后续分区不执行统计信息搜集
     first = True
     for table_schema, table_name, partition_name, col_list in need_analyze_objects:
         if partition_name == '':
@@ -452,7 +454,7 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
 
 def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="08:00", slow_query_table_first=False,
                order=True,
-               preview=False,parallel=1):
+               preview=False, parallel=1):
     """
     执行统计信息搜集
     :param conn:
@@ -492,6 +494,7 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
                     except Exception as e:
                         log.error(f"执行:{sql_text},失败，msg:{e}")
                     conn.close()
+
                 # todo 添加exector中队列深度，需要采用生产者消费者模式结合queue来保证未执行的SQL队列不过大
                 exector.submit(to_exec, pool, sql_text, start_time, end_time)
     return True
@@ -635,9 +638,8 @@ def with_timeout(timeout, func, *args, **kwargs):
 def timeout_handler(signum, frame):
     raise Exception("timeout")
 
+
 # q:如何捕获ctrl+c 异常？
-
-
 
 
 if __name__ == '__main__':
@@ -654,7 +656,7 @@ if __name__ == '__main__':
     parser.add_argument('--end-time',
                         help="统计信息允许的结束时间窗口,生产环境推荐设置为06:00,表示次日06点后不会执行统计信息搜集语句，但不会杀掉正在执行的最后一个统计信息语句",
                         required=False)
-    parser.add_argument('--parallel',help="统计信息搜集并发数，最多可并发10个",type=int, default=1)
+    parser.add_argument('--parallel', help="统计信息搜集并发数，最多可并发10个", type=int, default=1)
     parser.add_argument('-t', '--timeout', help="整个统计信息搜集最大时间，超过该时间则超时退出,单位为秒",
                         default=12 * 3600, type=int)
     args = parser.parse_args()
@@ -664,7 +666,7 @@ if __name__ == '__main__':
         args.password = input("password:")
     try:
         # 创建数据库连接池
-        pool = PooledDB(creator=pymysql, maxconnections=parallel+1, blocking=True, host=args.host, port=args.port,
+        pool = PooledDB(creator=pymysql, maxconnections=parallel + 1, blocking=True, host=args.host, port=args.port,
                         user=args.user, password=args.password, database=args.database)
         slow_query_table_first = False
         preview = False
@@ -673,7 +675,7 @@ if __name__ == '__main__':
         if args.preview:
             preview = True
         with_timeout(args.timeout, do_analyze, pool, start_time=args.start_time, end_time=args.end_time,
-                     slow_query_table_first=slow_query_table_first, order=True, preview=preview, parallel = parallel)
+                     slow_query_table_first=slow_query_table_first, order=True, preview=preview, parallel=parallel)
         pool.close()
     except Exception as e:
         log.error(f"connect to database failed, error: {e}")
