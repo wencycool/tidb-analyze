@@ -1,4 +1,4 @@
-```shell
+```
 PS E:\pythonProject\tidb_analyze\pythonProject> python .\tidb_analyze.py -h
 usage: tidb_analyze.py [-h] [-H HOST] [-P PORT] [-u USER] [-p [PASSWORD]] [-d DATABASE] [-t TIMEOUT] [--preview]
 
@@ -18,7 +18,7 @@ options:
   --preview             开启预览模式，不搜集统计信息搜集 (default: False)
 ```
 
-```shell
+```
 example1:
 PS E:\pythonProject\tidb_analyze\pythonProject> python .\tidb_analyze.py -H 192.168.31.201 -P 4000 -u root -p 
 password:

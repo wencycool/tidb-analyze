@@ -84,7 +84,7 @@ def get_analyze_failed_objects(conn: pymysql.connect):
 def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
     if threshold < 0 or threshold > 100:
         threshold = 90
-    sql_text = f"show stats_healthy where healthy < threshold;"
+    sql_text = f"show stats_healthy where healthy < {threshold};"
     cursor = conn.cursor()
     result = []
     try:
@@ -94,6 +94,7 @@ def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
             log.debug(f"健康度低于{threshold}的表(或者分区): {table_schema}.{table_name}，分区名: {partition_name}，健康度: {healthy}")
             result.append((table_schema, table_name, partition_name, healthy))
     except Exception as e:
+        log.error(f"execute sql:{sql_text},error:{e}")
         return None, False, e
     finally:
         cursor.close()
