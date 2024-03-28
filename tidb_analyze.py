@@ -406,16 +406,18 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
                         msg = f"当前时间:{datetime.datetime.now()}，不在指定时间范围内[{start_time}-{end_time}]，不执行统计信息搜集: {sql_text}，表记录数: {table_schema}.{table_name} = {table_rows}"
                         log.warning(msg)
                         return False
-                    t1 = time.time()
                     conn = pool.connection()
-                    cursor = conn.cursor()
-                    cursor.execute(sql_text)
-                    t2 = time.time()
-                    log.info(
-                        f"执行: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}，耗时: {round(t2 - t1, 2)}秒")
-                    cursor.close()
+                    try:
+                        t1 = time.time()
+                        cursor = conn.cursor()
+                        cursor.execute(sql_text)
+                        t2 = time.time()
+                        log.info(
+                            f"执行: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}，耗时: {round(t2 - t1, 2)}秒")
+                        cursor.close()
+                    except Exception as e:
+                        log.error(f"执行:{sql_text},失败，msg:{e}")
                     conn.close()
-
                 # todo 添加exector中队列深度，需要采用生产者消费者模式结合queue来保证未执行的SQL队列不过大
                 exector.submit(to_exec, pool, sql_text, start_time, end_time)
     return True
