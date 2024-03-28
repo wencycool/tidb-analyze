@@ -1,10 +1,13 @@
 import datetime
 import time
 import sys
-import pymysql
 import logging as log
 import argparse
 import re
+import pymysql
+import dbutils
+from dbutils.pooled_db import PooledDB
+
 # 用于缓存大对象查询结果，避免重复查询
 tables_with_blob_dict_cache = None
 tables_with_blob_dict_executed = False
@@ -16,6 +19,10 @@ partition_tables_executed = False
 # 缓存表的记录数
 tables_rows_cache = {}
 table_rows_executed = False
+
+
+# todo drop stats <tabname> 场景没有覆盖
+# todo 考虑当超时或者遇到ctrl+c后终止正在执行的统计信息搜集任务
 
 # 获取统计信息搜集失败的对象（包括表和分区）
 def get_analyze_failed_objects(conn: pymysql.connect):
@@ -63,7 +70,7 @@ def get_analyze_failed_objects(conn: pymysql.connect):
     try:
         cursor.execute(sql_text)
         for row in cursor:
-            table_schema, table_name,partition_name,start_time, fail_reason = row
+            table_schema, table_name, partition_name, start_time, fail_reason = row
             log.debug(
                 f"上次统计信息搜集失败的对象: {table_schema}.{table_name}，分区名: {partition_name}，失败原因: {fail_reason}，上次统计信息搜集时间: {start_time}")
             # 将分区表的partition_name置为:global
@@ -71,7 +78,7 @@ def get_analyze_failed_objects(conn: pymysql.connect):
                 is_partition, succ, error = is_partition_table(conn, table_schema, table_name)
                 if succ and is_partition:
                     partition_name = 'global'
-            result.append((table_schema, table_name,partition_name,start_time, fail_reason))
+            result.append((table_schema, table_name, partition_name, start_time, fail_reason))
     except Exception as e:
         return None, False, e
     finally:
@@ -91,7 +98,8 @@ def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
         cursor.execute(sql_text)
         for row in cursor:
             table_schema, table_name, partition_name, healthy = row
-            log.debug(f"健康度低于{threshold}的表(或者分区): {table_schema}.{table_name}，分区名: {partition_name}，健康度: {healthy}")
+            log.debug(
+                f"健康度低于{threshold}的表(或者分区): {table_schema}.{table_name}，分区名: {partition_name}，健康度: {healthy}")
             result.append((table_schema, table_name, partition_name, healthy))
     except Exception as e:
         log.error(f"execute sql:{sql_text},error:{e}")
@@ -100,6 +108,7 @@ def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
         cursor.close()
     log.info(f"健康度低于{threshold}的表(或者分区)数为: {len(result)}")
     return result, True, None
+
 
 # 从来没搜集过统计信息的表(不包含分区)需搜集
 def get_analyze_never_analyzed_objects(conn: pymysql.connect):
@@ -272,15 +281,16 @@ def get_all_tables_rows(conn: pymysql.connect):
     table_rows_executed = True
     return tables_rows_cache, True, None
 
+
 # 获取需要做统计信息搜集的对象（包括表和分区）
 # 如果是分区表，那么只做其分区的统计信息搜集，会自动做global merge stats
 def collect_need_analyze_objects(conn: pymysql.connect):
     object_dict = {}
     # 获取统计信息搜集失败的对象（包括表和分区）
-    result,succ,msg = get_analyze_failed_objects(conn)
+    result, succ, msg = get_analyze_failed_objects(conn)
     if succ:
-        for table_schema, table_name,partition_name,start_time, fail_reason in result:
-            object_dict[(table_schema, table_name,partition_name)] = False
+        for table_schema, table_name, partition_name, start_time, fail_reason in result:
+            object_dict[(table_schema, table_name, partition_name)] = False
     # 获取健康度低于90的表(或者分区)需重新搜集
     result, succ, msg = get_analyze_low_healthy_objects(conn)
     if succ:
@@ -288,33 +298,36 @@ def collect_need_analyze_objects(conn: pymysql.connect):
             object_dict[(table_schema, table_name, partition_name)] = False
     # 获取从来没搜集过统计信息的表(不包含分区)需搜集
     result, succ, msg = get_analyze_never_analyzed_objects(conn)
-    partition_tables_dict,succ1,msg1 = get_all_partition_tables(conn)
+    partition_tables_dict, succ1, msg1 = get_all_partition_tables(conn)
     if not succ1:
         raise Exception(f"获取分区表失败: {msg1}")
     if succ:
         for table_schema, table_name in result:
             # 如果是分区表则partition标记为global
-            if (table_schema,table_name) in partition_tables_dict:
-                if partition_tables_dict[(table_schema,table_name)]:
+            if (table_schema, table_name) in partition_tables_dict:
+                if partition_tables_dict[(table_schema, table_name)]:
                     object_dict[(table_schema, table_name, 'global')] = False
                 else:
                     object_dict[(table_schema, table_name, '')] = False
     # object_dict中的表为待做统计信息搜集的对象
     # 去掉分区表，只做分区的统计信息搜集
-    for table_schema,tablename,partition_name in object_dict:
+    for table_schema, tablename, partition_name in object_dict:
         if partition_name == 'global':
-            del object_dict[(table_schema,tablename,partition_name)]
+            del object_dict[(table_schema, tablename, partition_name)]
     # 获取包含blob字段的表，并生成排除大字段的列
     # object_dict值为可以做统计信息的字段，如果是False说明表中没有blob字段
     tables_with_blob_dict, succ, msg = get_tables_with_blob_dict(conn)
     if succ:
-        for table_schema,table_name,partition_name in object_dict:
-            if (table_schema,table_name) in tables_with_blob_dict:
-                object_dict[(table_schema,table_name,partition_name)] = tables_with_blob_dict[(table_schema,table_name)]
+        for table_schema, table_name, partition_name in object_dict:
+            if (table_schema, table_name) in tables_with_blob_dict:
+                object_dict[(table_schema, table_name, partition_name)] = tables_with_blob_dict[
+                    (table_schema, table_name)]
     result = []  # 包含（table_schema, table_name, partition_name, col_list）的列表
-    for table_schema,table_name,partition_name in object_dict:
-        result.append((table_schema,table_name,partition_name,object_dict[(table_schema,table_name,partition_name)]))
+    for table_schema, table_name, partition_name in object_dict:
+        result.append(
+            (table_schema, table_name, partition_name, object_dict[(table_schema, table_name, partition_name)]))
     return result
+
 
 # 生成统计信息搜集语句
 def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, order=True):
@@ -347,7 +360,7 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
                 log.warning(f"表记录数不存在: {table_schema}.{table_name}")
             else:
                 table_rows = tables_rows_dict[(table_schema, table_name)]
-            result[i] = (table_schema, table_name, partition_name,table_rows, col_list, sql_text)
+            result[i] = (table_schema, table_name, partition_name, table_rows, col_list, sql_text)
         # todo 添加slow_query相关的统计信息搜集优先级
         if succ:
             result.sort(key=lambda x: x[3])
@@ -358,12 +371,14 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
         for table_name in table_in_slow_log:
             for i in range(len(result)):
                 if table_name == result[i][1]:
-                    result.insert(0,result.pop(i))
+                    result.insert(0, result.pop(i))
                     break
     return result, True, None
 
 
-def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", slow_query_table_first=False,order=True, preview=False):
+def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="08:00", slow_query_table_first=False,
+               order=True,
+               preview=False,parallel=1):
     """
     执行统计信息搜集
     :param conn:
@@ -371,34 +386,40 @@ def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", slow
     :param end_time: 统计信息搜集结束时间,格式为:23:03,如果end_time < start_time,那么表示跨天，比如start_time=23:03,end_time=01:03说明当前时间在这个时间段内可做统计信息搜集
     :param order: 是否按照表记录数大小排序，如果为True，那么会按照表记录数大小排序，先做记录数小的表的统计信息搜集
     :param preview: 是否预览，如果为True，那么只打印统计信息搜集语句，不执行
-    :return: 返回结果（table_schema, table_name, partition_name, col_list, sql_text, succ, msg）
+    :return: 执行中是否报错True or False; ####返回结果（table_schema, table_name, partition_name, col_list, sql_text, succ, msg）
     """
-    result, succ, msg = gen_need_analyze_sqls(conn,slow_query_table_first, order)
+    conn = pool.connection()
+    result, succ, msg = gen_need_analyze_sqls(conn, slow_query_table_first, order)
     if preview:
         log.info(f"当前脚本为预览模式，不会真正做统计信息搜集")
     log.info(f"需要做统计信息搜集的对象数为: {len(result)}")
     if not succ:
-        return None, False, msg
-    cursor = conn.cursor()
-    try:
+        return False
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=parallel) as exector:
         for table_schema, table_name, partition_name, table_rows, col_list, sql_text in result:
             if preview:
                 log.info(f"预览: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}")
             else:
-                if not in_time_range(start_time, end_time):
-                    msg = f"当前时间:{datetime.datetime.now()}，不在指定时间范围内[{start_time}-{end_time}]，不执行统计信息搜集: {sql_text}，表记录数: {table_schema}.{table_name} = {table_rows}，后面表均不执行"
-                    log.warning(msg)
-                    return None, msg
-                t1 = time.time()
-                cursor.execute(sql_text)
-                t2 = time.time()
-                log.info(f"执行: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}，耗时: {round(t2 - t1,2)}秒")
-                conn.commit()
-    except Exception as e:
-        return None, False, e
-    finally:
-        cursor.close()
-    return result, True, None
+                def to_exec(pool: dbutils.pooled_db.PooledDB, sql_text, start_time, end_time):
+                    if not in_time_range(start_time, end_time):
+                        msg = f"当前时间:{datetime.datetime.now()}，不在指定时间范围内[{start_time}-{end_time}]，不执行统计信息搜集: {sql_text}，表记录数: {table_schema}.{table_name} = {table_rows}"
+                        log.warning(msg)
+                        return False
+                    t1 = time.time()
+                    conn = pool.connection()
+                    cursor = conn.cursor()
+                    cursor.execute(sql_text)
+                    t2 = time.time()
+                    log.info(
+                        f"执行: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}，耗时: {round(t2 - t1, 2)}秒")
+                    cursor.close()
+                    conn.close()
+
+                # todo 添加exector中队列深度，需要采用生产者消费者模式结合queue来保证未执行的SQL队列不过大
+                exector.submit(to_exec, pool, sql_text, start_time, end_time)
+    return True
+
 
 def in_time_range(start_time, end_time):
     """
@@ -414,11 +435,11 @@ def in_time_range(start_time, end_time):
     if not start_time or start_time == end_time:
         return True
     start_time = datetime.datetime.strptime(start_time, "%H:%M")
-    start_hour = start_time.hour + 1/60 * start_time.minute
+    start_hour = start_time.hour + 1 / 60 * start_time.minute
     end_time = datetime.datetime.strptime(end_time, "%H:%M")
-    end_hour = end_time.hour + 1/60 * end_time.minute
+    end_hour = end_time.hour + 1 / 60 * end_time.minute
     now_time = datetime.datetime.now()
-    now_hour = now_time.hour + 1/60 * now_time.minute
+    now_hour = now_time.hour + 1 / 60 * now_time.minute
     if start_hour < end_hour:
         if start_hour <= now_hour <= end_hour:
             return True
@@ -429,6 +450,7 @@ def in_time_range(start_time, end_time):
             return True
         else:
             return False
+
 
 # todo 优化正则表达式，支持获取模式名
 def get_all_tablename(sql_text):
@@ -443,6 +465,7 @@ def get_all_tablename(sql_text):
         else:
             return tablist
     return tablist
+
 
 def get_all_tables_from_database(conn: pymysql.connect):
     """
@@ -466,8 +489,9 @@ def get_all_tables_from_database(conn: pymysql.connect):
         cursor.close()
     return result, True, None
 
+
 # 从慢日志表中获取SQL语句中的表名
-def get_tablename_from_slow_log(conn:pymysql.connect):
+def get_tablename_from_slow_log(conn: pymysql.connect):
     """
     从慢日志表中获取SQL语句中的表名
     :param conn:
@@ -481,9 +505,9 @@ def get_tablename_from_slow_log(conn:pymysql.connect):
     try:
         cursor.execute(sql_text)
         for row in cursor:
-            user,db,query_time,query = row
+            user, db, query_time, query = row
             tablist = get_all_tablename(query)
-            #对tablist去重
+            # 对tablist去重
             tablist = list(set(tablist))
             for table_name in tablist:
                 result.append(table_name)
@@ -535,39 +559,45 @@ def with_timeout(timeout, func, *args, **kwargs):
 def timeout_handler(signum, frame):
     raise Exception("timeout")
 
+# q:如何捕获ctrl+c 异常？
+
+
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='analyze tidb tables',
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-H', '--host', help='database host', default='127.0.0.1')
-    parser.add_argument('-P', '--port', help='database port', default=4000,type=int)
+    parser.add_argument('-P', '--port', help='database port', default=4000, type=int)
     parser.add_argument('-u', '--user', help='database user', default='root')
     parser.add_argument('-p', '--password', help='database password', nargs='?')
     parser.add_argument('-d', '--database', help='database name', default='information_schema')
     parser.add_argument('--preview', help='开启预览模式，不搜集统计信息搜集', action='store_true')
-    parser.add_argument('--slow-log-first',help="当表在slow_query中优先做统计信息搜集",action='store_true')
-    parser.add_argument('--start-time',help="统计信息允许的开始时间窗口,生产环境可设置为20:00",default="00:00",required=False)
-    parser.add_argument('--end-time',help="统计信息允许的结束时间窗口,生产环境推荐设置为06:00,表示次日06点后不会执行统计信息搜集语句，但不会杀掉正在执行的最后一个统计信息语句",default="00:00",required=False)
-    parser.add_argument('-t','--timeout',help="整个统计信息搜集最大时间，超过该时间则超时退出,单位为秒",default=12 * 3600,type=int)
+    parser.add_argument('--slow-log-first', help="当表在slow_query中优先做统计信息搜集", action='store_true')
+    parser.add_argument('--start-time', help="统计信息允许的开始时间窗口,生产环境可设置为20:00", required=False)
+    parser.add_argument('--end-time',
+                        help="统计信息允许的结束时间窗口,生产环境推荐设置为06:00,表示次日06点后不会执行统计信息搜集语句，但不会杀掉正在执行的最后一个统计信息语句",
+                        required=False)
+    parser.add_argument('--parallel',help="统计信息搜集并发数，最多可并发10个",type=int, default=1)
+    parser.add_argument('-t', '--timeout', help="整个统计信息搜集最大时间，超过该时间则超时退出,单位为秒",
+                        default=12 * 3600, type=int)
     args = parser.parse_args()
+    parallel = 10 if args.parallel > 10 else args.parallel
     log.basicConfig(level=log.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     if args.password is None:
         args.password = input("password:")
     try:
-        conn = pymysql.connect(
-            host=args.host,
-            port=args.port,
-            user=args.user,
-            password=args.password,
-            database=args.database,
-            charset='utf8mb4'
-        )
+        # 创建数据库连接池
+        pool = PooledDB(creator=pymysql, maxconnections=parallel+1, blocking=True, host=args.host, port=args.port,
+                        user=args.user, password=args.password, database=args.database)
         slow_query_table_first = False
         preview = False
         if args.slow_log_first:
             slow_query_table_first = True
         if args.preview:
             preview = True
-        with_timeout(args.timeout, do_analyze,conn,start_time=args.start_time,end_time=args.end_time,slow_query_table_first=slow_query_table_first,order=True,preview=preview)
-        conn.close()
+        with_timeout(args.timeout, do_analyze, pool, start_time=args.start_time, end_time=args.end_time,
+                     slow_query_table_first=slow_query_table_first, order=True, preview=preview, parallel = parallel)
+        pool.close()
     except Exception as e:
         log.error(f"connect to database failed, error: {e}")
