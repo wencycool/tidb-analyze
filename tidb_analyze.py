@@ -374,6 +374,8 @@ def do_analyze(conn: pymysql.connect, start_time="20:00", end_time="08:00", slow
     :return: 返回结果（table_schema, table_name, partition_name, col_list, sql_text, succ, msg）
     """
     result, succ, msg = gen_need_analyze_sqls(conn,slow_query_table_first, order)
+    if preview:
+        log.info(f"当前脚本为预览模式，不会真正做统计信息搜集")
     log.info(f"需要做统计信息搜集的对象数为: {len(result)}")
     if not succ:
         return None, False, msg
@@ -402,9 +404,15 @@ def in_time_range(start_time, end_time):
     """
     判断当前时间是否在指定时间范围内，比如判断当前时间是否在 8:00-20:00 之间，对于start_time23:00，end_time 7:00的情况，end_time需要设置为第二天的时间，比如 7:00
     :param start_time: 开始时间，格式为 %H:%M
+    :type start_time: str
     :param end_time: 结束时间，格式为 %H:%M
+    :type end_time: str
     :return: True or False
+    :rtype: bool
     """
+    # 如果未设置开始时间，或开始时间等于结束时间，则返回True
+    if not start_time or start_time == end_time:
+        return True
     start_time = datetime.datetime.strptime(start_time, "%H:%M")
     start_hour = start_time.hour + 1/60 * start_time.minute
     end_time = datetime.datetime.strptime(end_time, "%H:%M")
@@ -537,8 +545,8 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--database', help='database name', default='information_schema')
     parser.add_argument('--preview', help='开启预览模式，不搜集统计信息搜集', action='store_true')
     parser.add_argument('--slow-log-first',help="当表在slow_query中优先做统计信息搜集",action='store_true')
-    parser.add_argument('--start-time',help="统计信息允许的开始时间窗口",default="20:00")
-    parser.add_argument('--end-time',help="统计信息允许的结束时间窗口",default="06:00")
+    parser.add_argument('--start-time',help="统计信息允许的开始时间窗口,生产环境可设置为20:00",default="00:00",required=False)
+    parser.add_argument('--end-time',help="统计信息允许的结束时间窗口,生产环境推荐设置为06:00,表示次日06点后不会执行统计信息搜集语句，但不会杀掉正在执行的最后一个统计信息语句",default="00:00",required=False)
     parser.add_argument('-t','--timeout',help="整个统计信息搜集最大时间，超过该时间则超时退出,单位为秒",default=12 * 3600,type=int)
     args = parser.parse_args()
     log.basicConfig(level=log.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
