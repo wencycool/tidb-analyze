@@ -661,7 +661,8 @@ if __name__ == '__main__':
                         default=12 * 3600, type=int)
     args = parser.parse_args()
     parallel = 10 if args.parallel > 10 else args.parallel
-    log.basicConfig(level=log.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    log.basicConfig(level=log.INFO,
+                    format='%(asctime)s - %(name)s-%(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s')
     if args.password is None:
         args.password = input("password:")
     try:
