@@ -43,7 +43,7 @@ def get_analyze_failed_objects(conn: pymysql.connect):
                                 where nbr = 1
                                   and (table_schema, table_name, partition_name) not in (select a.table_schema,
                                                                                 a.table_name, -- 对于报错的表，找出比报错时间更近的一次成功的统计信息搜集的表是否存在，如果不存在则需要做统计信息搜集，此处是找到比报错时间更近的一次成功的统计信息搜集的表
-                                                                                a.partition_name
+                                                                                 a.partition_name
                                                                          from mysql.analyze_jobs a,
                                                                               (select table_schema, table_name, partition_name, start_time, fail_reason
                                                                                from (select table_schema, -- 找出最近7天统计信息搜集报错过的表
@@ -231,6 +231,9 @@ def get_tables_with_blob_dict(conn: pymysql.connect):
                 where (table_schema, table_name) in (select table_schema, table_name from table_with_blob)
                 group by table_schema, table_name
     """
+    cursor = conn.cursor()
+    cursor.execute("set group_concat_max_len=102400;")
+    cursor.close()
     cursor = conn.cursor()
     result = {}
     try:
