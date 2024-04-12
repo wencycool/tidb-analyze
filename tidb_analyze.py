@@ -219,9 +219,7 @@ def get_tables_with_blob_dict(conn: pymysql.connect):
                                                                          'mediumblob', 'json', 'longblob')
                                                                   group by table_schema, table_name))
 
-    select a.table_schema, a.table_name, b.col_list
-          from table_with_blob a,
-               (select table_schema,
+    select table_schema,
                        table_name,
                        group_concat(
                                case
@@ -231,7 +229,7 @@ def get_tables_with_blob_dict(conn: pymysql.connect):
                                    end order by ordinal_position separator ',') as col_list
                 from information_schema.columns
                 where (table_schema, table_name) in (select table_schema, table_name from table_with_blob)
-                group by table_schema, table_name) b
+                group by table_schema, table_name
     """
     cursor = conn.cursor()
     result = {}
@@ -637,9 +635,6 @@ def with_timeout(timeout, func, *args, **kwargs):
 
 def timeout_handler(signum, frame):
     raise Exception("timeout")
-
-
-# q:如何捕获ctrl+c 异常？
 
 
 if __name__ == '__main__':
