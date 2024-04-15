@@ -376,7 +376,9 @@ def collect_need_analyze_objects(conn: pymysql.connect):
                     object_dict[(table_schema, table_name, '')] = False
     # object_dict中的表为待做统计信息搜集的对象
     # 去掉分区表，只做分区的统计信息搜集
-    for table_schema, tablename, partition_name in object_dict:
+    # 采用list(object_dict.keys())的方式，避免在遍历时删除元素导致的异常
+    keys = list(object_dict.keys())
+    for table_schema, tablename, partition_name in keys:
         if partition_name == 'global':
             del object_dict[(table_schema, tablename, partition_name)]
     # 获取包含blob字段的表，并生成排除大字段的列
