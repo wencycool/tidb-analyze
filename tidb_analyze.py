@@ -26,9 +26,19 @@ table_rows_executed = False
 # 获取统计信息搜集失败的对象（包括表和分区）
 def get_analyze_failed_objects(conn: pymysql.connect):
     """
-    获取统计信息搜集失败的对象（包括表和分区）
-    :param conn: 数据库连接
-    :return: 返回结果（table_schema, table_name,partition_name,start_time, fail_reason），是否成功，错误信息
+    This function retrieves the objects (including tables and partitions) for which the collection of statistical information has failed.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema, name, partition name, start time, and failure reason of an object for which the collection of statistical information has failed.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = """
     with table_need_analyze as (select table_schema, table_name,partition_name,start_time, fail_reason -- 找出最近7天统计信息搜集报错过，且报错后没有成功做过统计信息的表
@@ -88,6 +98,23 @@ def get_analyze_failed_objects(conn: pymysql.connect):
 
 # 健康度低于90的表(或者分区)需重新搜集
 def get_analyze_low_healthy_objects(conn: pymysql.connect, threshold: int = 90):
+    """
+    This function retrieves the tables (or partitions) that have a health score lower than the specified threshold.
+    The health score is a measure of the quality of the statistics collected for a table or partition.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+    threshold (int, optional): The health score threshold. Tables (or partitions) with a health score lower than this value will be retrieved. Defaults to 90.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema, name, partition name, and health score of a table (or partition) that has a health score lower than the threshold.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
+    """
     if threshold < 0 or threshold > 100:
         threshold = 90
     sql_text = f"show stats_healthy where healthy < {threshold};"
@@ -126,10 +153,21 @@ mysql> show stats_meta where row_count=0;
 # 获取drop stats <tabname>的表需要重新搜集
 def get_analyze_drop_stats_objects(conn: pymysql.connect):
     """
-    先利用show stats_meta找到所有包含统计信息的表
-    找出所有去重后的表，结合 information_schema.tables查找不在show stats_meta中的表，即为drop stats <tabname>的表
-    :param conn:
-    :return:
+    This function retrieves the tables that have been dropped from the statistics.
+    It does this by comparing the tables in the database with the tables in the statistics.
+    If a table is in the database but not in the statistics, it means that the table has been dropped from the statistics.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema and name of a table that has been dropped from the statistics.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = """
     show stats_meta;
@@ -171,6 +209,39 @@ def get_analyze_drop_stats_objects(conn: pymysql.connect):
 
 # 从来没搜集过统计信息的表(不包含分区)需搜集
 def get_analyze_never_analyzed_objects(conn: pymysql.connect):
+    """
+    This function is used to get the tables that have never been analyzed.
+    It only includes non-partitioned tables.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema and name of a table that has never been analyzed.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
+    """
+    sql_text = """
+    select table_schema,table_name from INFORMATION_SCHEMA.tables where table_type = 'BASE TABLE' and (tidb_table_id,create_time) in (
+    select table_id,tidb_parse_tso(version) from mysql.stats_meta where snapshot = 0
+    )
+    """
+    cursor = conn.cursor()
+    result = []
+    try:
+        cursor.execute(sql_text)
+        for row in cursor:
+            table_schema, table_name = row
+            result.append((table_schema, table_name))
+    except Exception as e:
+        return None, False, e
+    finally:
+        cursor.close()
+    return result, True, None
     sql_text = """
     select table_schema,table_name from INFORMATION_SCHEMA.tables where table_type = 'BASE TABLE' and (tidb_table_id,create_time) in (
     select table_id,tidb_parse_tso(version) from mysql.stats_meta where snapshot = 0
@@ -195,6 +266,21 @@ def get_analyze_never_analyzed_objects(conn: pymysql.connect):
 
 # 查询出包含blob字段的表，并生成排除大字段的列
 def get_tables_with_blob_dict(conn: pymysql.connect):
+    """
+    This function retrieves tables that contain blob fields and generates columns excluding large fields.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - dict: A dictionary where the key is a tuple (table_schema, table_name) and the value is a string of column names excluding large fields.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
+    """
     """
     查询出包含blob字段的表，并生成排除大字段的列
     :param conn:
@@ -257,11 +343,21 @@ def get_tables_with_blob_dict(conn: pymysql.connect):
 # 如果该表未分区表，那么不做统计信息搜集，只做其分区的统计信息搜集，会自动做global merge stats
 def is_partition_table(conn: pymysql.connect, table_schema: str, table_name: str):
     """
-    判断是否是分区表
-    :param conn:
-    :param table_schema:
-    :param table_name:
-    :return: 返回是否是分区表，是否成功，错误信息
+    This function checks if a given table in a specific schema is a partitioned table.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+    table_schema (str): The name of the schema where the table is located.
+    table_name (str): The name of the table to check.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - bool: A boolean value indicating whether the table is a partitioned table.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = f"""
     show create table `{table_schema}`.`{table_name}`
@@ -282,9 +378,19 @@ def is_partition_table(conn: pymysql.connect, table_schema: str, table_name: str
 # 获取数据库中所有分区表（非分区表的partion_name为空）
 def get_all_partition_tables(conn: pymysql.connect):
     """
-    获取所有分区表
-    :param conn:
-    :return: 返回结果dict[(table_schema,table_name)] = [是否分区表]，是否成功，错误信息
+    This function retrieves all partitioned tables from the database.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - dict: A dictionary where the key is a tuple (table_schema, table_name) and the value is a boolean indicating whether the table is a partitioned table.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = """
     select table_schema,table_name,count(*) as cnt from information_schema.partitions group by table_schema, table_name;
@@ -315,11 +421,19 @@ def get_all_partition_tables(conn: pymysql.connect):
 # 获取表的记录数
 def get_all_tables_rows(conn: pymysql.connect):
     """
-    获取表的记录数
-    :param conn:
-    :param table_schema:
-    :param table_name:
-    :return: 返回表的记录数，是否成功，错误信息
+    This function retrieves the number of rows for all tables in the database.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - dict: A dictionary where the key is a tuple (table_schema, table_name) and the value is the number of rows in the table.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     global tables_rows_cache
     global table_rows_executed
@@ -345,6 +459,20 @@ def get_all_tables_rows(conn: pymysql.connect):
 # 获取需要做统计信息搜集的对象（包括表和分区）
 # 如果是分区表，那么只做其分区的统计信息搜集，会自动做global merge stats
 def collect_need_analyze_objects(conn: pymysql.connect):
+    """
+    This function collects the objects that need to be analyzed. It retrieves the objects (including tables and partitions)
+    for which the collection of statistical information has failed, tables (or partitions) that have a health score lower
+    than the specified threshold, tables that have been dropped from the statistics, and tables that have never been analyzed.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    list: A list of tuples. Each tuple contains the schema, name, partition name, and column list of an object that needs to be analyzed.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
+    """
     object_dict = {}
     # 获取统计信息搜集失败的对象（包括表和分区）
     result, succ, msg = get_analyze_failed_objects(conn)
@@ -399,11 +527,21 @@ def collect_need_analyze_objects(conn: pymysql.connect):
 # 生成统计信息搜集语句
 def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, order=True):
     """
-    生成统计信息搜集语句
-    :param conn:
-    :param slow_query_table_first: 是否优先做慢日志表中的表的统计信息搜集
-    :param order: 是否按照表记录数大小排序，如果为True，那么会按照表记录数大小排序，先做记录数小的表的统计信息搜集
-    :return: 返回结果（table_schema, table_name, partition_name, table_rows, col_list, sql_text），是否成功，错误信息
+    This function generates SQL statements for the objects that need to be analyzed. It retrieves the objects (including tables and partitions)
+    for which the collection of statistical information has failed, tables (or partitions) that have a health score lower
+    than the specified threshold, tables that have been dropped from the statistics, and tables that have never been analyzed.
+    It then generates SQL statements for these objects.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+    slow_query_table_first (bool, optional): If set to True, the function will prioritize tables that appear in the slow query log. Defaults to False.
+    order (bool, optional): If set to True, the function will order the objects by the number of rows in the table, prioritizing smaller tables. Defaults to True.
+
+    Returns:
+    list: A list of tuples. Each tuple contains the schema, name, partition name, column list, and the generated SQL statement for an object that needs to be analyzed.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     # 获取需要做统计信息搜集的对象
     need_analyze_objects = collect_need_analyze_objects(conn)
@@ -460,7 +598,7 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
                preview=False, parallel=1):
     """
     执行统计信息搜集
-    :param conn:
+    :param pool: 数据库连接池
     :param start_time: 统计信息搜集开始时间,格式为:23:03
     :param end_time: 统计信息搜集结束时间,格式为:23:03,如果end_time < start_time,那么表示跨天，比如start_time=23:03,end_time=01:03说明当前时间在这个时间段内可做统计信息搜集
     :param order: 是否按照表记录数大小排序，如果为True，那么会按照表记录数大小排序，先做记录数小的表的统计信息搜集
@@ -505,13 +643,18 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
 
 def in_time_range(start_time, end_time):
     """
-    判断当前时间是否在指定时间范围内，比如判断当前时间是否在 8:00-20:00 之间，对于start_time23:00，end_time 7:00的情况，end_time需要设置为第二天的时间，比如 7:00
-    :param start_time: 开始时间，格式为 %H:%M
-    :type start_time: str
-    :param end_time: 结束时间，格式为 %H:%M
-    :type end_time: str
-    :return: True or False
-    :rtype: bool
+    This function checks if the current time falls within a specified time range.
+
+    Parameters:
+    start_time (str): The start of the time range in the format %H:%M.
+    end_time (str): The end of the time range in the format %H:%M.
+
+    Returns:
+    bool: True if the current time is within the specified range, False otherwise.
+
+    Note:
+    If the start_time is greater than the end_time, it means the time range spans across two days.
+    For example, start_time=23:00, end_time=01:00 means the time range is from 23:00 of the current day to 01:00 of the next day.
     """
     # 如果未设置开始时间，或开始时间等于结束时间，则返回True
     if not start_time or start_time == end_time:
@@ -536,6 +679,18 @@ def in_time_range(start_time, end_time):
 
 # todo 优化正则表达式，支持获取模式名
 def get_all_tablename(sql_text):
+    """
+    This function extracts all table names from a given SQL query.
+
+    Parameters:
+    sql_text (str): The SQL query from which to extract table names.
+
+    Returns:
+    list: A list of table names extracted from the SQL query.
+
+    Note:
+    The function uses regular expressions to find the table names. It looks for patterns that match SQL syntax for referencing tables.
+    """
     tablist = []
     # pattern_text='from\s+?("?(?P<first>\w+?)\s*?"?\.)?"?(?P<last>\w+) *"?'
     pattern_text = '(from|delete\s+from|update)\s+("?\w+"?\.)?"?(?P<last>\w+)"?'
@@ -551,9 +706,19 @@ def get_all_tablename(sql_text):
 
 def get_all_tables_from_database(conn: pymysql.connect):
     """
-    获取数据库中所有表名
-    :param conn:
-    :return: 返回结果（table_schema, table_name），是否成功，错误信息
+    This function retrieves all table names from the database.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema and name of a table in the database.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = """
     select  table_schema, table_name
@@ -573,11 +738,21 @@ def get_all_tables_from_database(conn: pymysql.connect):
 
 
 # 从慢日志表中获取SQL语句中的表名
-def get_tablename_from_slow_log(conn: pymysql.connect):
+def get_all_tables_from_database(conn: pymysql.connect):
     """
-    从慢日志表中获取SQL语句中的表名
-    :param conn:
-    :return: 返回结果（table_name），是否成功，错误信息
+    This function retrieves all table names from the database.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema and name of a table in the database.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
     """
     sql_text = """
     select user,db,query_time,Query from (select user,db,query_time,Query,row_number() over (partition by digest) as nbr from INFORMATION_SCHEMA.slow_query where is_internal=0 and  `Time` > DATE_SUB(NOW(),INTERVAL 1 DAY) limit 10000)a where nbr = 1
@@ -614,6 +789,22 @@ def get_tablename_from_slow_log(conn: pymysql.connect):
 
 
 def with_timeout(timeout, func, *args, **kwargs):
+    """
+    This function executes a given function with a specified timeout. If the function execution exceeds the timeout,
+    an exception is raised. This function is specifically designed for Linux systems.
+
+    Parameters:
+    timeout (int): The maximum time (in seconds) for the function to run.
+    func (function): The function to be executed.
+    *args: Variable length argument list for the function to be executed.
+    **kwargs: Arbitrary keyword arguments for the function to be executed.
+
+    Returns:
+    Any: The return value of the function that was executed.
+
+    Raises:
+    Exception: An exception is raised if the function execution exceeds the timeout.
+    """
     # 判断当前系统是否为linux
     if not sys.platform == 'linux':
         return func(*args, **kwargs)
@@ -639,6 +830,16 @@ def with_timeout(timeout, func, *args, **kwargs):
 
 
 def timeout_handler(signum, frame):
+    """
+    This function is a signal handler that raises an exception when a timeout signal is received.
+
+    Parameters:
+    signum (int): The signal number that was received.
+    frame (frame object): The current stack frame.
+
+    Raises:
+    Exception: An exception is raised when a timeout signal is received.
+    """
     raise Exception("timeout")
 
 
