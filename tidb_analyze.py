@@ -592,6 +592,66 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
                     break
     return result, True, None
 
+# 从慢日志表中获取SQL语句中的表名
+def get_tablename_from_slow_log(conn: pymysql.connect):
+    """
+    This function retrieves table names from the slow query log in the database.
+
+    The function executes a SQL query to fetch user, database, query time, and the query itself from the slow query log.
+    It limits the results to 10000 and only fetches unique queries (based on their digest) that were executed by external users
+    and have been logged in the last day.
+
+    After fetching the data, it iterates over the rows and for each row, it extracts all table names from the query using
+    the `get_all_tablename` function. The table names are then added to the result list.
+
+    Finally, it filters the result list to only include tables that actually exist in the database. This is done by fetching
+    all table names from the database using the `get_all_tables_from_database` function and checking if each table in the
+    result list exists in the database.
+
+    Parameters:
+    conn (pymysql.connect): The database connection object.
+
+    Returns:
+    tuple: A tuple containing the following elements:
+        - list: A list of tuples. Each tuple contains the schema and name of a table that was referenced in a slow query.
+        - bool: A boolean value indicating whether the operation was successful.
+        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
+
+    Raises:
+    Exception: An exception is raised if there is an error executing the SQL query.
+    """
+    sql_text = """
+    select user,db,query_time,Query from (select user,db,query_time,Query,row_number() over (partition by digest) as nbr from INFORMATION_SCHEMA.slow_query where is_internal=0 and  `Time` > DATE_SUB(NOW(),INTERVAL 1 DAY) limit 10000)a where nbr = 1
+    """
+    cursor = conn.cursor()
+    result = []  # 返回(db,table_name)
+    try:
+        cursor.execute(sql_text)
+        for row in cursor:
+            user, db, query_time, query = row
+            tablist = get_all_tablename(query)
+            # 对tablist去重
+            tablist = list(set(tablist))
+            for table_name in tablist:
+                result.append(table_name)
+    except Exception as e:
+        return None, False, e
+    finally:
+        cursor.close()
+    # 对result去重
+    result = list(set(result))
+    # 从数据库中获取所有表名
+    all_tables, success, error = get_all_tables_from_database(conn)
+    if not success:
+        return None, False, error
+    # 将all_tables转换为字典
+    all_tables_dict = {}
+    # 如果表名重复，以最后一次为准
+    for table_schema, table_name in all_tables:
+        all_tables_dict[table_name] = table_schema
+    # 对result进行过滤，只保留数据库中存在的表模式和表名
+    result = [(all_tables_dict[table_name], table_name) for table_name in result if table_name in all_tables_dict]
+    return result, True, None
 
 def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="08:00", slow_query_table_first=False,
                order=True,
@@ -618,7 +678,8 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
             if preview:
                 log.info(f"预览: {sql_text}，搜集前表记录数: {table_schema}.{table_name} = {table_rows}")
             else:
-                def to_exec(pool: dbutils.pooled_db.PooledDB, sql_text, start_time, end_time):
+                def to_exec(pool: dbutils.pooled_db.PooledDB, sql_text, table_schema, table_name, table_rows,
+                            start_time, end_time):
                     if not in_time_range(start_time, end_time):
                         msg = f"当前时间:{datetime.datetime.now()}，不在指定时间范围内[{start_time}-{end_time}]，不执行统计信息搜集: {sql_text}，表记录数: {table_schema}.{table_name} = {table_rows}"
                         log.warning(msg)
@@ -637,7 +698,7 @@ def do_analyze(pool: dbutils.pooled_db.PooledDB, start_time="20:00", end_time="0
                     conn.close()
 
                 # todo 添加exector中队列深度，需要采用生产者消费者模式结合queue来保证未执行的SQL队列不过大
-                exector.submit(to_exec, pool, sql_text, start_time, end_time)
+                exector.submit(to_exec, pool, sql_text, table_schema, table_name, table_rows, start_time, end_time)
     return True
 
 
@@ -702,39 +763,6 @@ def get_all_tablename(sql_text):
         else:
             return tablist
     return tablist
-
-
-def get_all_tables_from_database(conn: pymysql.connect):
-    """
-    This function retrieves all table names from the database.
-
-    Parameters:
-    conn (pymysql.connect): The database connection object.
-
-    Returns:
-    tuple: A tuple containing the following elements:
-        - list: A list of tuples. Each tuple contains the schema and name of a table in the database.
-        - bool: A boolean value indicating whether the operation was successful.
-        - None/Exception: If an error occurred during the operation, it returns the exception; otherwise, it returns None.
-
-    Raises:
-    Exception: An exception is raised if there is an error executing the SQL query.
-    """
-    sql_text = """
-    select  table_schema, table_name
-    from information_schema.tables where table_type = 'BASE TABLE' and lower(table_schema) not in ('mysql','information_schema','performance_schema','sys')
-    """
-    cursor = conn.cursor()
-    result = []
-    try:
-        cursor.execute(sql_text)
-        for row in cursor:
-            result.append((row[0], row[1]))
-    except Exception as e:
-        return None, False, e
-    finally:
-        cursor.close()
-    return result, True, None
 
 
 # 从慢日志表中获取SQL语句中的表名
