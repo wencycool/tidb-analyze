@@ -1,4 +1,5 @@
 import datetime
+import getpass
 import time
 import sys
 import logging as log
@@ -12,7 +13,7 @@ from dbutils.pooled_db import PooledDB
 tables_with_blob_dict_cache = None
 tables_with_blob_dict_executed = False
 
-# 用户缓存分区表查询结果，避免重复查询
+# 用户缓存分区表查询结果，避免重复查询å
 partition_tables_cache = None
 partition_tables_executed = False
 
@@ -893,7 +894,8 @@ if __name__ == '__main__':
     log.basicConfig(level=log.INFO,
                     format='%(asctime)s - %(name)s-%(filename)s[line:%(lineno)d] - %(levelname)s - %(message)s')
     if args.password is None:
-        args.password = input("password:")
+        # 输入密码时不显示
+        args.password = getpass.getpass("password:")
     try:
         # 创建数据库连接池
         pool = PooledDB(creator=pymysql, maxconnections=parallel + 1, blocking=True, host=args.host, port=args.port,
