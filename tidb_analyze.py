@@ -566,6 +566,10 @@ def gen_need_analyze_sqls(conn: pymysql.connect, slow_query_table_first=False, o
             #  stats，但分区是串行执行，存在效率问题？如果表中所有分区都需要做统计信息搜集，那么是否可以直接做表的统计信息搜集？做成 analyze table xxx partition p0,p1,p2形式
             sql_text = f"analyze table `{table_schema}`.`{table_name}` partition `{partition_name}`"
         if col_list:
+            # 给每一个列加上反引号
+            col_list = col_list.split(',')
+            col_list = [f"`{col}`" for col in col_list]
+            col_list = ','.join(col_list)
             sql_text = sql_text + f" columns {col_list}"
         result.append((table_schema, table_name, partition_name, col_list, sql_text))
     if order:
