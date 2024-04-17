@@ -912,8 +912,10 @@ if __name__ == '__main__':
             slow_query_table_first = True
         if args.preview:
             preview = True
+        t1 = time.time()
         with_timeout(args.timeout, do_analyze, pool, start_time=args.start_time, end_time=args.end_time,
                      slow_query_table_first=slow_query_table_first, order=True, preview=preview, parallel=parallel)
+        log.info(f"总耗时: {round(time.time() - t1, 2)}秒")
         pool.close()
     except Exception as e:
         log.error(f"connect to database failed, error: {e}")
