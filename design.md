@@ -14,7 +14,7 @@
 - 优先搜集慢查询中的表
 
 版本要求
-- tidb.version >= 6.5
+- tidb.version >= 6.1.0
 
 ---
 
