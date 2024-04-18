@@ -823,6 +823,20 @@ def get_all_tables_from_database(conn: pymysql.connect):
     return result, True, None
 
 
+# 获取tidb数据库的版本信息
+def get_tidb_version(conn: pymysql.connect):
+    cursor = conn.cursor()
+    sql_text = "select version()"
+    cursor.execute(sql_text)
+    tidb_version = ''
+    for row in cursor:
+        tidb_version = row[0]
+        break
+    cursor.close()
+    return tidb_version.split('-')[-1]
+
+
+
 def with_timeout(timeout, func, *args, **kwargs):
     """
     This function executes a given function with a specified timeout. If the function execution exceeds the timeout,
@@ -906,6 +920,12 @@ if __name__ == '__main__':
         # 创建数据库连接池
         pool = PooledDB(creator=pymysql, maxconnections=parallel + 1, blocking=True, host=args.host, port=args.port,
                         user=args.user, password=args.password, database=args.database)
+        # 判断当前tidb版本是否大于6.1.0，如果小于6.1.0，那么不支持analyze table语法
+        tidb_version = get_tidb_version(pool.connection())
+        log.info(f"当前tidb版本为: {tidb_version}")
+        if tidb_version < 'v6.1.0':
+            log.error("analyze脚本不支持当前tidb版本，请将集群升级到6.1.0及以上版本")
+            exit(1)
         slow_query_table_first = False
         preview = False
         if args.slow_log_first:
