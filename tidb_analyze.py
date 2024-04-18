@@ -893,8 +893,7 @@ def timeout_handler(signum, frame):
 
 
 def get_help_description():
-    str = """
-    analyze tidb tables
+    str = """analyze tidb tables
     策略：
         在mysql.analyze_jobs中一直未成功搜集的表（或分区）需重新搜集
         健康度低于90的表(或者分区)需重新搜集
@@ -908,8 +907,8 @@ def get_help_description():
     扩展功能：
         优先搜集慢查询中的表
     版本要求
-        tidb.version >= 6.1.0
-    """
+        tidb.version >= 6.1.0"""
+
     return str
 
 
