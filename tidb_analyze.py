@@ -894,20 +894,20 @@ def timeout_handler(signum, frame):
 
 def get_help_description():
     str = """analyze tidb tables
-    策略：
-        在mysql.analyze_jobs中一直未成功搜集的表（或分区）需重新搜集
-        健康度低于90的表(或者分区)需重新搜集
-        从来没搜集过统计信息的表(或者分区)需搜集
-        做过drop stats的表需要重新搜集
-        对于分区表，如果只是部分分区失败则只搜集失败的分区，否则搜集整个表
-        排除blob、clob、lob、text、midieum字段类型（这些字段不做统计信息搜集）
-        按照table_rows升序搜集
-        待统计信息表如果在最近慢日志中出现过，则优先搜集（优先级大于table_rows）
-        规定统计信息搜集时间窗口
-    扩展功能：
-        优先搜集慢查询中的表
-    版本要求
-        tidb.version >= 6.1.0"""
+策略：
+    1、在mysql.analyze_jobs中一直未成功搜集的表（或分区）会搜集统计信息
+    2、健康度低于90的表(或者分区)会搜集统计信息
+    3、从来没搜集过统计信息的表(或者分区)会搜集统计信息
+    4、做过drop stats的表会搜集统计信息
+    5、对于分区表，如果只是部分分区失败则只搜集失败的分区，否则搜集整个表
+    6、排除blob、clob、lob、text、midieum字段类型（这些字段不做统计信息搜集）
+    7、按照table_rows升序搜集
+    8、待统计信息表如果在最近慢日志中出现过，则优先搜集（优先级大于table_rows）
+    9、规定统计信息搜集时间窗口
+扩展功能：
+    优先搜集慢查询中的表
+版本要求
+    tidb.version >= 6.1.0"""
 
     return str
 
